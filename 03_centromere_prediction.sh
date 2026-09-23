@@ -207,3 +207,183 @@ echo "Chromosome-level summary:"
 echo
 
 cat Chr1-8_5kb_TR_summary.tsv
+
+# Select windows with gene coverage = 0 and TR coverage >= 70%
+awk -F'\t' '
+BEGIN{OFS="\t"}
+
+NR==FNR {
+    if(NR>1)
+        gene[$1 FS $2 FS $3]=$6
+    next
+}
+
+NR>1 {
+    key=$1 FS $2 FS $3
+    if($6>=0.70 && gene[key]==0)
+        print $1,$2,$3,$6,gene[key]
+}
+' \
+windows_5kb_gene_coverage.tsv \
+windows_5kb_TR_coverage.tsv \
+> TR70_gene0_5kb.tsv
+
+# Merge consecutive windows only when the end of one window exactly matches the start of the next
+awk -F'\t' '
+BEGIN{OFS="\t"}
+
+NR==1 {
+    chr=$1
+    start=$2
+    end=$3
+    n=1
+    tr_sum=$4
+    next
+}
+
+{
+    if($1==chr && $2==end) {
+        end=$3
+        n++
+        tr_sum+=$4
+    }
+    else {
+        print chr,start,end,end-start,n,tr_sum/n
+        chr=$1
+        start=$2
+        end=$3
+        n=1
+        tr_sum=$4
+    }
+}
+
+END {
+    print chr,start,end,end-start,n,tr_sum/n
+}
+' TR70_gene0_5kb.tsv \
+> TR70_gene0_5kb_merged.tsv
+
+#View the start positions and lengths of TRs within all candidate regions in chromosome order.
+only@admin1-Rack-Server:~/TMTM_10kb_centromere_analysis$ awk '$1=="ChrX" && $2 < xxxxxxxx && $3 > xxxxxxxx {
+    print $1, $2, $3, $3-$2
+}' OFS='\t' TRF_merged.bed
+
+
+## Centromere prediction using quarTeT
+set -euo pipefail
+
+project_root=${1:-/opt/hdd/users/BH10160/tianmu_tiemu_centromere_quartet}
+threads=${2:-8}
+
+apptainer=${project_root}/../software/apptainer/bin/apptainer
+if [[ ! -x "${apptainer}" ]]; then
+    apptainer=/opt/hdd/users/BH10160/software/apptainer/bin/apptainer
+fi
+
+image=${project_root}/tools/quartet-bio-1.3.1.sif
+input_dir=${project_root}/work/chromosome_inputs
+genome=${input_dir}/tianmu_tiemu.chromosomes.fa
+repeat_gff=${input_dir}/tianmu_tiemu.chromosomes.repeat.gff3
+gene_gff=${input_dir}/tianmu_tiemu.chromosomes.gene.gff3
+output_dir=${project_root}/results/centrominer_default
+log_dir=${project_root}/logs
+tmp_dir=${project_root}/work/tmp
+
+mkdir -p "${output_dir}" "${log_dir}" "${tmp_dir}"
+
+for required in "${apptainer}" "${image}" "${genome}" "${repeat_gff}" "${gene_gff}"; do
+    if [[ ! -s "${required}" ]]; then
+        echo "Missing or empty required file: ${required}" >&2
+        exit 1
+    fi
+done
+
+if find "${output_dir}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+    echo "Output directory is not empty: ${output_dir}" >&2
+    echo "Move or remove the existing run before starting a new one." >&2
+    exit 1
+fi
+
+{
+    echo "run_started=$(date -Iseconds)"
+    echo "hostname=$(hostname)"
+    echo "threads=${threads}"
+    echo "image=${image}"
+    sha256sum "${image}" "${genome}" "${repeat_gff}" "${gene_gff}"
+    "${apptainer}" exec --cleanenv "${image}" quartet -h
+    "${apptainer}" exec --cleanenv "${image}" blastn -version
+    "${apptainer}" exec --cleanenv "${image}" Rscript --version
+} > "${log_dir}/software_and_input_manifest.txt" 2>&1
+
+cd "${output_dir}"
+
+export APPTAINER_CACHEDIR=${project_root}/.apptainer/cache
+export APPTAINER_TMPDIR=${project_root}/.apptainer/tmp
+export APPTAINERENV_TMPDIR=${tmp_dir}
+
+command=(
+    "${apptainer}" exec --cleanenv --bind "${project_root}:${project_root}" "${image}"
+    quartet CentroMiner
+    -i "${genome}"
+    --TE "${repeat_gff}"
+    --gene "${gene_gff}"
+    -t "${threads}"
+    -p tianmu_tiemu
+)
+
+printf '%q ' "${command[@]}" > "${log_dir}/centrominer_command.txt"
+printf '\n' >> "${log_dir}/centrominer_command.txt"
+
+set +e
+/usr/bin/time -v "${command[@]}" > >(tee "${log_dir}/centrominer.stdout.log") 2> >(tee "${log_dir}/centrominer.stderr.log" >&2)
+status=$?
+set -e
+
+echo "${status}" > "${log_dir}/centrominer.exit_status"
+date -Iseconds > "${log_dir}/run_finished.txt"
+
+if [[ "${status}" -ne 0 ]]; then
+    echo "CentroMiner failed with exit status ${status}." >&2
+    exit "${status}"
+fi
+
+echo "CentroMiner completed successfully: ${output_dir}"
+
+#
+samtools=/opt/miniconda3/envs/bioenv/bin/samtools
+
+$samtools view -F 2304 ont_vs_genome.sorted.bam | \
+awk '
+NR==FNR{
+chr[++n]=$1
+s[n]=$2
+e[n]=$3
+l[n]=$3-$2
+next
+}
+{
+for(i=1;i<=n;i++)
+if($3==chr[i]){
+rs=$4
+re=$4+length($10)
+
+ov=(re<e[i]?re:e[i])-(rs>s[i]?rs:s[i])
+
+if(ov>0){
+r=ov/l[i]
+for(j=1;j<=10;j++)
+if(r>=j/10)c[i,j]++
+}
+}
+}
+END{
+print "Chr\t10%\t20%\t30%\t40%\t50%\t60%\t70%\t80%\t90%\t100%"
+for(i=1;i<=n;i++){
+printf "%s",chr[i]
+for(j=1;j<=10;j++)
+printf "\t%d",c[i,j]+0
+print ""
+}
+}
+' final_centromere_candidates.bed - \
+> ONT_centromere_span_fraction.tsv
