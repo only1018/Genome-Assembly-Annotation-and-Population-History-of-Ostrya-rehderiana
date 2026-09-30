@@ -56,7 +56,7 @@ fi
 
 
 # ============================================================
-# Step 1. Identify tandem repeats using TRF
+ Identify tandem repeats using TRF
 # ============================================================
 
 echo "[1/5] Running TRF..."
@@ -68,7 +68,7 @@ echo "[1/5] Running TRF..."
 
 
 # ============================================================
-# Step 2. Generate TRF BED file
+# Generate TRF BED file
 # ============================================================
 
 echo "[2/5] Preparing TRF BED file..."
@@ -90,7 +90,7 @@ fi
 
 
 # ============================================================
-# Step 3. Generate non-overlapping 5-kb windows
+#  Generate non-overlapping 5-kb windows
 # ============================================================
 
 echo "[3/5] Generating 5-kb windows..."
@@ -109,7 +109,7 @@ wc -l windows_5kb.bed
 
 
 # ============================================================
-# Step 4. Calculate TR coverage for each 5-kb window
+#  Calculate TR coverage for each 5-kb window
 # ============================================================
 
 echo "[4/5] Calculating TR coverage..."
@@ -134,7 +134,7 @@ awk 'BEGIN{
 
 
 # ============================================================
-# Step 5. Summarize TR coverage for each chromosome
+# Summarize TR coverage for each chromosome
 # ============================================================
 
 echo "[5/5] Generating chromosome-level summary..."
